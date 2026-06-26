@@ -1,13 +1,14 @@
 """
-Running Leaderboard — GPX Edition  (v2: Territory Conquest)
-------------------------------------------------------------
-- Each runner gets a unique color
-- Conquered areas shown as colored bubbles on the map
-- Whoever has most KM in an area owns it (bubble = their color)
-- Overlapping bubbles: the runner with most KM wins that zone
-- Official place name (OpenStreetMap) stays permanent
-- "Conquered by [Name]" shown beside the track name
-- Actual route line drawn on map in runner's color
+Running Leaderboard — GPX Edition
+----------------------------------
+No Strava API, no subscriptions, no API keys.
+Runners export a .gpx file from Strava / Garmin / Apple Health / their phone's
+GPS app and upload it here. The app:
+  1. Parses the GPX route, distance, duration, pace
+  2. Auto-detects "areas" (tracks / parks / loops) by clustering nearby runs
+  3. Names each area using free OpenStreetMap reverse-geocoding
+  4. Builds a leaderboard per area — whoever has the most KM "owns" that track
+  5. Draws everything on a free OpenStreetMap-based map
 """
 
 import json
@@ -28,40 +29,18 @@ from streamlit_folium import st_folium
 # ──────────────────────────────────────────────────────────────────────────
 # Config
 # ──────────────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Territory Run", page_icon="⚔️", layout="wide")
+st.set_page_config(page_title="Running Leaderboard", page_icon="🏃", layout="wide")
 
 DATA_DIR = "data"
 RUNS_FILE = os.path.join(DATA_DIR, "runs.json")
 AREA_CACHE_FILE = os.path.join(DATA_DIR, "area_names.json")
 
 EARTH_RADIUS_KM = 6371.0088
-CLUSTER_RADIUS_KM = 0.2
+CLUSTER_RADIUS_KM = 0.2  # runs within ~200m of each other count as the same track
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
-NOMINATIM_HEADERS = {"User-Agent": "territory-run-leaderboard/2.0"}
-
-# Conquest bubble radius in meters
-BUBBLE_RADIUS_M = 180
+NOMINATIM_HEADERS = {"User-Agent": "running-leaderboard-app/1.0"}
 
 os.makedirs(DATA_DIR, exist_ok=True)
-
-# ── Athlete color palette (up to 10 athletes) ──
-ATHLETE_COLORS = [
-    "#2ECC71",  # green
-    "#E74C3C",  # red
-    "#3498DB",  # blue
-    "#F39C12",  # orange
-    "#9B59B6",  # purple
-    "#1ABC9C",  # teal
-    "#E91E63",  # pink
-    "#FF5722",  # deep orange
-    "#607D8B",  # blue grey
-    "#CDDC39",  # lime
-]
-
-FOLIUM_COLORS = [
-    "green", "red", "blue", "orange", "purple",
-    "cadetblue", "pink", "darkred", "darkblue", "lightgreen",
-]
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -102,12 +81,15 @@ def save_area_cache(cache):
 # GPX parsing
 # ──────────────────────────────────────────────────────────────────────────
 def parse_gpx(file_bytes, athlete_name, file_name):
+    """Parse a GPX file into a run record dict, or None if it has no usable points."""
     gpx = gpxpy.parse(BytesIO(file_bytes))
+
     points = []
     for track in gpx.tracks:
         for segment in track.segments:
             for p in segment.points:
                 points.append((p.latitude, p.longitude))
+
     if not points:
         return None
 
@@ -118,6 +100,8 @@ def parse_gpx(file_bytes, athlete_name, file_name):
 
     lats = [p[0] for p in points]
     lons = [p[1] for p in points]
+    centroid_lat = sum(lats) / len(lats)
+    centroid_lon = sum(lons) / len(lons)
 
     start_time = None
     try:
@@ -133,14 +117,15 @@ def parse_gpx(file_bytes, athlete_name, file_name):
         "distance_km": round(distance_km, 2),
         "duration_min": round(duration_min, 1) if duration_min else None,
         "pace_min_per_km": round(pace, 2) if pace else None,
-        "centroid_lat": sum(lats) / len(lats),
-        "centroid_lon": sum(lons) / len(lons),
+        "centroid_lat": centroid_lat,
+        "centroid_lon": centroid_lon,
+        # Keep a lightly simplified point list so the map doesn't get huge
         "points": points[:: max(1, len(points) // 300)],
     }
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Area clustering + naming
+# Area clustering
 # ──────────────────────────────────────────────────────────────────────────
 def assign_area_ids(runs):
     if not runs:
@@ -155,7 +140,7 @@ def get_area_name(lat, lon, cache):
     key = f"{round(lat, 3)},{round(lon, 3)}"
     if key in cache:
         return cache[key]
-    name = f"Track ({lat:.3f}, {lon:.3f})"
+    name = f"Unnamed Track ({lat:.3f}, {lon:.3f})"
     try:
         resp = requests.get(
             NOMINATIM_URL,
@@ -168,7 +153,6 @@ def get_area_name(lat, lon, cache):
             addr = data.get("address", {})
             name = (
                 addr.get("leisure")
-                or addr.get("amenity")
                 or addr.get("park")
                 or addr.get("road")
                 or addr.get("suburb")
@@ -192,8 +176,7 @@ def build_dataframe(runs):
     area_names = {}
     for area_id in df["area_id"].unique():
         sub = df[df["area_id"] == area_id]
-        clat = sub["centroid_lat"].mean()
-        clon = sub["centroid_lon"].mean()
+        clat, clon = sub["centroid_lat"].mean(), sub["centroid_lon"].mean()
         area_names[area_id] = get_area_name(clat, clon, cache)
     save_area_cache(cache)
 
@@ -201,69 +184,16 @@ def build_dataframe(runs):
     return df
 
 
-def get_athlete_color_map(athletes):
-    """Assign a stable hex color + folium color to each athlete."""
-    color_map = {}
-    for i, name in enumerate(sorted(set(athletes))):
-        color_map[name] = {
-            "hex": ATHLETE_COLORS[i % len(ATHLETE_COLORS)],
-            "folium": FOLIUM_COLORS[i % len(FOLIUM_COLORS)],
-        }
-    return color_map
-
-
 # ──────────────────────────────────────────────────────────────────────────
-# Custom CSS
+# UI — Sidebar: upload
 # ──────────────────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-/* Big bold conquest header */
-.conquest-header {
-    font-size: 2rem;
-    font-weight: 800;
-    margin-bottom: 0.2rem;
-}
-/* Athlete color badge */
-.badge {
-    display: inline-block;
-    padding: 3px 12px;
-    border-radius: 20px;
-    font-weight: 700;
-    font-size: 0.85rem;
-    color: white;
-    margin-right: 6px;
-}
-/* Track card */
-.track-card {
-    border-left: 5px solid;
-    border-radius: 6px;
-    padding: 12px 18px;
-    margin-bottom: 14px;
-    background: rgba(255,255,255,0.04);
-}
-.track-title {
-    font-size: 1.15rem;
-    font-weight: 700;
-    margin-bottom: 2px;
-}
-.conquered-by {
-    font-size: 1rem;
-    opacity: 0.85;
-}
-</style>
-""", unsafe_allow_html=True)
-
-
-# ──────────────────────────────────────────────────────────────────────────
-# Sidebar
-# ──────────────────────────────────────────────────────────────────────────
-st.sidebar.header("⚔️ Add Your Run")
-athlete_name = st.sidebar.text_input("Your name", placeholder="e.g. Omais")
+st.sidebar.header("⚙️ Add Your Run")
+athlete_name = st.sidebar.text_input("Your name", placeholder="e.g. Bilal Ahmed")
 uploaded_files = st.sidebar.file_uploader(
     "Upload GPX file(s)", type=["gpx"], accept_multiple_files=True
 )
 
-if st.sidebar.button("🚀 Conquer Territory", type="primary"):
+if st.sidebar.button("Add to Leaderboard", type="primary"):
     if not athlete_name.strip():
         st.sidebar.error("Please enter your name first.")
     elif not uploaded_files:
@@ -277,72 +207,48 @@ if st.sidebar.button("🚀 Conquer Territory", type="primary"):
                 runs.append(record)
                 added += 1
         save_runs(runs)
-        st.sidebar.success(f"✅ {added} run(s) added! Territory updated.")
+        st.sidebar.success(f"Added {added} run(s)! Scroll down to see your spot on the board.")
         st.rerun()
 
 st.sidebar.divider()
 st.sidebar.caption(
-    "💡 **How to get a GPX file:**\n\n"
-    "- **Strava**: activity → ⋯ menu → Export GPX\n"
+    "💡 How to get a GPX file:\n\n"
+    "- **Strava**: open an activity → ⋯ menu → Export GPX\n"
     "- **Garmin Connect**: activity → gear icon → Export to GPX\n"
-    "- **Any GPS running app**: look for Export or Share → GPX"
+    "- **Apple Health / phone GPS apps**: most running apps have a GPX export option"
 )
 
 if st.sidebar.button("🗑️ Reset all data"):
     save_runs([])
     save_area_cache({})
+    st.sidebar.success("Cleared!")
     st.rerun()
 
 
 # ──────────────────────────────────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────────────────────────────────
-st.markdown('<div class="conquest-header">⚔️ Territory Run — Conquer Your City</div>', unsafe_allow_html=True)
-st.caption("Upload your GPX runs. The more you run an area, the more territory you own.")
+st.title("🏃 Running Leaderboard")
+st.caption("Powered by free GPX uploads + OpenStreetMap — no Strava subscription required.")
 
 runs = load_runs()
 
 if not runs:
-    st.info("No runs yet! Upload a GPX file from the sidebar to claim your first territory. 👈")
+    st.info("No runs yet! Upload a GPX file from the sidebar to get started. 👈")
     st.stop()
 
 df = build_dataframe(runs)
 
-athlete_color_map = get_athlete_color_map(df["athlete"].tolist())
-
-# ── Summary stats ──
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("⚔️ Total Runs", len(df))
+# ---- Overall stats ----
+col1, col2, col3 = st.columns(3)
+col1.metric("🏃 Total Runs", len(df))
 col2.metric("📏 Total KM", f"{df['distance_km'].sum():,.1f} km")
-col3.metric("📍 Territories", df["area_id"].nunique())
-col4.metric("🏃 Runners", df["athlete"].nunique())
+col3.metric("📍 Tracks Found", df["area_id"].nunique())
 
 st.divider()
 
-# ── Athlete legend ──
-st.subheader("🎨 Runners")
-legend_cols = st.columns(min(len(athlete_color_map), 5))
-for i, (name, colors) in enumerate(athlete_color_map.items()):
-    total_km = df[df["athlete"] == name]["distance_km"].sum()
-    areas_owned = 0
-    for area_id in df["area_id"].unique():
-        sub = df[df["area_id"] == area_id]
-        owner = sub.groupby("athlete")["distance_km"].sum().idxmax()
-        if owner == name:
-            areas_owned += 1
-    with legend_cols[i % 5]:
-        st.markdown(
-            f'<div style="border-left: 5px solid {colors["hex"]}; padding: 8px 12px; border-radius:4px; margin-bottom:8px;">'
-            f'<b style="color:{colors["hex"]}; font-size:1.1rem;">{name}</b><br>'
-            f'<span style="font-size:0.85rem;">{total_km:.1f} km &nbsp;|&nbsp; {areas_owned} territory owned</span>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-st.divider()
-
-# ── Leaderboard by track ──
-st.subheader("🏆 Territory Leaderboard")
+# ---- Per-area leaderboard ----
+st.header("🏆 Leaderboard by Track")
 
 area_totals = (
     df.groupby(["area_id", "area_name"])["distance_km"]
@@ -367,109 +273,109 @@ for _, area_row in area_totals.iterrows():
         .sort_values("total_km", ascending=False)
     )
     owner = leaderboard.iloc[0]["athlete"]
-    owner_color = athlete_color_map[owner]["hex"]
-    owner_km = leaderboard.iloc[0]["total_km"]
 
-    st.markdown(
-        f'<div class="track-card" style="border-color:{owner_color};">'
-        f'<div class="track-title">📍 {area_name}</div>'
-        f'<div class="conquered-by">'
-        f'<span class="badge" style="background:{owner_color};">⚔️ Conquered by {owner}</span>'
-        f'{owner_km:.2f} km logged here'
-        f'</div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    medals = ["🥇", "🥈", "🥉"]
-    display_df = leaderboard.copy()
-    display_df.insert(0, "", [medals[i] if i < 3 else "" for i in range(len(display_df))])
-    display_df = display_df.rename(columns={
-        "athlete": "Athlete",
-        "total_km": "Total KM",
-        "runs": "Runs",
-        "best_pace": "Best Pace (min/km)",
-    })
-    st.dataframe(display_df, hide_index=True, use_container_width=True)
-    st.markdown("<br>", unsafe_allow_html=True)
+    with st.expander(f"📍 **{area_name}** — 👑 held by **{owner}**", expanded=True):
+        medals = ["🥇", "🥈", "🥉"]
+        display_df = leaderboard.copy()
+        display_df.insert(
+            0, "", [medals[i] if i < 3 else "" for i in range(len(display_df))]
+        )
+        display_df = display_df.rename(
+            columns={
+                "athlete": "Athlete",
+                "total_km": "Total KM",
+                "runs": "Runs",
+                "best_pace": "Best Pace (min/km)",
+            }
+        )
+        st.dataframe(display_df, hide_index=True, use_container_width=True)
 
 st.divider()
 
-# ── Map: territory bubbles + route lines ──
-st.subheader("🗺️ Territory Map")
-st.caption("Colored bubbles = conquered zones. Lines = actual routes run. Bigger bubble = more KM logged.")
+# ---- Map ----
+st.header("🗺️ Map")
 
-avg_lat = df["centroid_lat"].mean()
-avg_lon = df["centroid_lon"].mean()
-m = folium.Map(location=[avg_lat, avg_lon], zoom_start=14, tiles="OpenStreetMap")
+avg_lat, avg_lon = df["centroid_lat"].mean(), df["centroid_lon"].mean()
+m = folium.Map(location=[avg_lat, avg_lon], zoom_start=13, tiles="OpenStreetMap")
 
-# Draw route lines first (underneath bubbles)
+colors = [
+    "red", "blue", "green", "purple", "orange", "darkred",
+    "cadetblue", "darkgreen", "darkblue", "pink",
+]
+area_color_map = {
+    area_id: colors[i % len(colors)]
+    for i, area_id in enumerate(df["area_id"].unique())
+}
+
 for _, run in df.iterrows():
     pts = run["points"]
-    athlete = run["athlete"]
-    hex_color = athlete_color_map[athlete]["hex"]
     if len(pts) >= 2:
         folium.PolyLine(
             pts,
-            color=hex_color,
+            color=area_color_map[run["area_id"]],
             weight=3,
-            opacity=0.75,
-            tooltip=f"{athlete} — {run['distance_km']} km",
+            opacity=0.6,
+            tooltip=f"{run['athlete']} — {run['distance_km']} km",
         ).add_to(m)
 
-# Draw conquest bubbles per area (owner's color)
-for area_id in df["area_id"].unique():
+# Build one summary row per area, then draw bubbles smallest-total-km first.
+# In Leaflet, layers added later render on top, so drawing biggest-last means
+# a high-km bubble is never hidden underneath a smaller, nearby one.
+area_summaries = []
+for area_id, area_name in df.groupby("area_id")["area_name"].first().items():
     sub = df[df["area_id"] == area_id]
-    area_name = sub["area_name"].iloc[0]
-    clat = sub["centroid_lat"].mean()
-    clon = sub["centroid_lon"].mean()
+    owner_row = sub.groupby("athlete")["distance_km"].sum().sort_values(ascending=False)
+    area_summaries.append(
+        {
+            "area_id": area_id,
+            "area_name": area_name,
+            "lat": sub["centroid_lat"].mean(),
+            "lon": sub["centroid_lon"].mean(),
+            "total_km": owner_row.sum(),
+            "owner": owner_row.index[0],
+            "owner_km": owner_row.iloc[0],
+        }
+    )
 
-    owner_series = sub.groupby("athlete")["distance_km"].sum().sort_values(ascending=False)
-    owner = owner_series.index[0]
-    owner_km = owner_series.iloc[0]
-    owner_hex = athlete_color_map[owner]["hex"]
-    owner_folium = athlete_color_map[owner]["folium"]
+area_summaries.sort(key=lambda a: a["total_km"])  # smallest first → drawn first → ends up underneath
 
-    # Bubble size scales with KM (min 100m, max 400m radius)
-    radius_m = min(400, max(100, int(owner_km * 60)))
+MIN_RADIUS, MAX_RADIUS = 10, 32
+max_km_overall = max(a["total_km"] for a in area_summaries) or 1
 
-    folium.Circle(
-        location=[clat, clon],
-        radius=radius_m,
-        color=owner_hex,
+for a in area_summaries:
+    # Scale by sqrt so bubble *area* (not just radius) reflects km proportionally
+    scale = math.sqrt(a["total_km"] / max_km_overall) if max_km_overall else 0
+    radius = MIN_RADIUS + scale * (MAX_RADIUS - MIN_RADIUS)
+
+    folium.CircleMarker(
+        location=[a["lat"], a["lon"]],
+        radius=radius,
+        color=area_color_map[a["area_id"]],
         fill=True,
-        fill_color=owner_hex,
-        fill_opacity=0.25,
+        fill_color=area_color_map[a["area_id"]],
+        fill_opacity=0.75,
         weight=2,
-        tooltip=f"⚔️ {area_name} — Conquered by {owner} ({owner_km:.1f} km)",
+        popup=f"<b>{a['area_name']}</b><br>👑 {a['owner']} ({a['owner_km']:.1f} km)<br>Total: {a['total_km']:.1f} km",
+        tooltip=f"{a['area_name']} — 👑 {a['owner']} ({a['total_km']:.1f} km total)",
     ).add_to(m)
 
-    # Flag marker at center
-    folium.Marker(
-        location=[clat, clon],
-        popup=folium.Popup(
-            f"<b>{area_name}</b><br>⚔️ Conquered by <b>{owner}</b><br>{owner_km:.2f} km logged",
-            max_width=200,
-        ),
-        tooltip=f"⚔️ {owner} owns this",
-        icon=folium.Icon(color=owner_folium, icon="flag"),
-    ).add_to(m)
-
-st_folium(m, width=None, height=550)
+st_folium(m, width=None, height=500)
 
 st.divider()
 with st.expander("📋 All uploaded runs"):
     st.dataframe(
         df[["athlete", "file_name", "area_name", "distance_km", "duration_min", "pace_min_per_km", "run_date"]]
-        .rename(columns={
-            "athlete": "Athlete",
-            "file_name": "File",
-            "area_name": "Track",
-            "distance_km": "KM",
-            "duration_min": "Duration (min)",
-            "pace_min_per_km": "Pace (min/km)",
-            "run_date": "Date",
-        }),
+        .rename(
+            columns={
+                "athlete": "Athlete",
+                "file_name": "File",
+                "area_name": "Track",
+                "distance_km": "KM",
+                "duration_min": "Duration (min)",
+                "pace_min_per_km": "Pace (min/km)",
+                "run_date": "Date",
+            }
+        ),
         hide_index=True,
         use_container_width=True,
     )
