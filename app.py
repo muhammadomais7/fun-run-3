@@ -337,14 +337,16 @@ for area_id, area_name in df.groupby("area_id")["area_name"].first().items():
         }
     )
 
-area_summaries.sort(key=lambda a: a["total_km"])  # smallest first → drawn first → ends up underneath
+area_summaries.sort(key=lambda a: a["owner_km"])  # smallest leader-km first → drawn first → ends up underneath
 
 MIN_RADIUS, MAX_RADIUS = 10, 32
-max_km_overall = max(a["total_km"] for a in area_summaries) or 1
+max_owner_km_overall = max(a["owner_km"] for a in area_summaries) or 1
 
 for a in area_summaries:
-    # Scale by sqrt so bubble *area* (not just radius) reflects km proportionally
-    scale = math.sqrt(a["total_km"] / max_km_overall) if max_km_overall else 0
+    # Scale by sqrt so bubble *area* (not just radius) reflects the LEADER's km,
+    # not the combined km of everyone who ran there — this is "who conquered it",
+    # not "how much total traffic it got".
+    scale = math.sqrt(a["owner_km"] / max_owner_km_overall) if max_owner_km_overall else 0
     radius = MIN_RADIUS + scale * (MAX_RADIUS - MIN_RADIUS)
 
     folium.CircleMarker(
@@ -355,8 +357,8 @@ for a in area_summaries:
         fill_color=area_color_map[a["area_id"]],
         fill_opacity=0.75,
         weight=2,
-        popup=f"<b>{a['area_name']}</b><br>👑 {a['owner']} ({a['owner_km']:.1f} km)<br>Total: {a['total_km']:.1f} km",
-        tooltip=f"{a['area_name']} — 👑 {a['owner']} ({a['total_km']:.1f} km total)",
+        popup=f"<b>{a['area_name']}</b><br>👑 {a['owner']} — {a['owner_km']:.1f} km",
+        tooltip=f"{a['area_name']} — 👑 {a['owner']} ({a['owner_km']:.1f} km)",
     ).add_to(m)
 
 st_folium(m, width=None, height=500)
