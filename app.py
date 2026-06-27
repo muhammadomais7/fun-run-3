@@ -23,7 +23,7 @@ from streamlit_folium import st_folium
 # ──────────────────────────────────────────────────────────────────────────
 # Config
 # ──────────────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Running Leaderboard", page_icon="🏃", layout="wide")
+st.set_page_config(page_title="Runova", page_icon="⚡", layout="wide")
 
 st.markdown("""
 <style>
@@ -611,7 +611,7 @@ st.markdown(f"""
 
 <div class="hero-wrap">
     <div class="hero-tag">⚡ Conquer · Dominate · Rule</div>
-    <div class="hero-title">Running<br><span>Leaderboard</span></div>
+    <div class="hero-title">Run<span>ova</span></div>
     <div class="hero-sub">drop your gpx. claim your track. flex on everyone.</div>
     <div class="hero-pill">📍 {total_tracks} {'track' if total_tracks == 1 else 'tracks'} being contested</div>
     <div class="hero-divider"></div>
