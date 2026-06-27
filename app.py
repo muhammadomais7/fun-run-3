@@ -25,6 +25,29 @@ from streamlit_folium import st_folium
 # ──────────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Running Leaderboard", page_icon="🏃", layout="wide")
 
+st.markdown("""
+<style>
+[data-testid="stAppViewContainer"] {
+    background-image: url("https://raw.githubusercontent.com/muhammadomais7/omais-app/main/dragon.jpg");
+    background-size: cover;
+    background-position: center;
+    background-attachment: fixed;
+    background-repeat: no-repeat;
+}
+[data-testid="stAppViewContainer"]::before {
+    content: "";
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(14, 17, 23, 0.88);
+    z-index: 0;
+}
+[data-testid="stAppViewContainer"] > * {
+    position: relative;
+    z-index: 1;
+}
+</style>
+""", unsafe_allow_html=True)
+
 DATA_DIR = "data"
 RUNS_FILE = os.path.join(DATA_DIR, "runs.json")
 AREA_CACHE_FILE = os.path.join(DATA_DIR, "area_names.json")
