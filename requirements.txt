@@ -1,8 +1,8 @@
 streamlit
-gpxpy
 pandas
 numpy
+requests
+gpxpy
 folium
 streamlit-folium
 scikit-learn
-requests
