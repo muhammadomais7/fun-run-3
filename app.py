@@ -362,14 +362,13 @@ def build_athlete_summary(athlete_df):
 
 def call_groq(prompt):
     if not GROQ_KEY:
-        st.error("DEBUG: GROQ_KEY is empty — key not found in secrets")
         return None
     try:
         resp = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
             json={
-                "model": "llama3-8b-8192",
+                "model": "llama-3.3-70b-versatile",
                 "messages": [{"role": "user", "content": prompt}],
                 "max_tokens": 300,
             },
@@ -377,10 +376,8 @@ def call_groq(prompt):
         )
         if resp.ok:
             return resp.json()["choices"][0]["message"]["content"]
-        else:
-            st.error(f"DEBUG: Groq status {resp.status_code} — {resp.text[:300]}")
-    except Exception as e:
-        st.error(f"DEBUG: Exception — {e}")
+    except Exception:
+        pass
     return None
 
 def render_ai_coach(athlete, athlete_df):
