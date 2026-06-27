@@ -35,8 +35,8 @@ CLUSTER_RADIUS_KM = 0.2
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
 NOMINATIM_HEADERS = {"User-Agent": "running-leaderboard-app/1.0"}
 
-GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
-N8N_WEBHOOK = st.secrets.get("N8N_WEBHOOK_URL", "")
+GROQ_KEY = st.secrets["GROQ_API_KEY"] if "GROQ_API_KEY" in st.secrets else ""
+N8N_WEBHOOK = st.secrets["N8N_WEBHOOK_URL"] if "N8N_WEBHOOK_URL" in st.secrets else ""
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
