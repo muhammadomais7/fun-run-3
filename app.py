@@ -35,7 +35,7 @@ CLUSTER_RADIUS_KM = 0.2
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
 NOMINATIM_HEADERS = {"User-Agent": "running-leaderboard-app/1.0"}
 
-GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "")
+GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
 N8N_WEBHOOK = st.secrets.get("N8N_WEBHOOK_URL", "")
 
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -360,17 +360,22 @@ def build_athlete_summary(athlete_df):
         "pace_trend": pace_trend,
     }
 
-def call_gemini(prompt):
-    if not GEMINI_KEY:
+def call_groq(prompt):
+    if not GROQ_KEY:
         return None
     try:
         resp = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}",
-            json={"contents": [{"parts": [{"text": prompt}]}]},
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
+            json={
+                "model": "llama3-8b-8192",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 300,
+            },
             timeout=15,
         )
         if resp.ok:
-            return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+            return resp.json()["choices"][0]["message"]["content"]
     except Exception:
         pass
     return None
@@ -379,8 +384,8 @@ def render_ai_coach(athlete, athlete_df):
     cache_key = f"coach_{athlete}"
     with st.popover("🤖 AI Coach"):
         if cache_key not in st.session_state:
-            if not GEMINI_KEY:
-                st.info("Add GEMINI_API_KEY to Streamlit secrets to enable AI coaching.")
+            if not GROQ_KEY:
+                st.info("Add GROQ_API_KEY to Streamlit secrets to enable AI coaching.")
                 return
             if st.button("✨ Generate coaching advice", key=f"gen_{athlete}"):
                 summary = build_athlete_summary(athlete_df)
@@ -391,18 +396,17 @@ def render_ai_coach(athlete, athlete_df):
                     "tip to improve. Be encouraging but honest. Use plain language, no jargon."
                 )
                 with st.spinner("Thinking..."):
-                    result = call_gemini(prompt)
+                    result = call_groq(prompt)
                 if result:
                     st.session_state[cache_key] = result
                     st.rerun()
                 else:
-                    st.error("Couldn't reach Gemini — check your API key in Streamlit secrets.")
+                    st.error("Couldn't reach Groq — check your GROQ_API_KEY in Streamlit secrets.")
         else:
             st.markdown(st.session_state[cache_key])
             if st.button("🔄 Regenerate", key=f"regen_{athlete}"):
                 del st.session_state[cache_key]
                 st.rerun()
-
 # ──────────────────────────────────────────────────────────────────────────
 # Sidebar — upload form
 # ──────────────────────────────────────────────────────────────────────────
