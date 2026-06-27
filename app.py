@@ -536,20 +536,91 @@ for track, pos, ath in rank_ups_now:
 # ──────────────────────────────────────────────────────────────────────────
 # Main content
 # ──────────────────────────────────────────────────────────────────────────
-st.title("🏃 Running Leaderboard")
-st.caption("Powered by free GPX uploads + OpenStreetMap — no Strava subscription required.")
-
 runs = load_runs()
+df = build_dataframe(runs) if runs else pd.DataFrame()
+
+total_runs = len(df) if not df.empty else 0
+total_km = f"{df['distance_km'].sum():,.1f}" if not df.empty else "0.0"
+total_tracks = df["area_id"].nunique() if not df.empty else 0
+
+st.markdown(f"""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;600;800&display=swap');
+
+.hero-wrap {{
+    text-align: center;
+    padding: 3rem 1rem 2.5rem;
+    position: relative;
+}}
+.hero-tag {{
+    display: inline-block;
+    background: linear-gradient(90deg, #c8a84b, #ffe97d, #c8a84b);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    font-size: 0.7rem;
+    font-family: 'Inter', sans-serif;
+    font-weight: 800;
+    letter-spacing: 6px;
+    text-transform: uppercase;
+    margin-bottom: 0.6rem;
+}}
+.hero-title {{
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: clamp(3.5rem, 10vw, 6rem);
+    line-height: 0.95;
+    color: #fff;
+    letter-spacing: 2px;
+    margin: 0.3rem 0;
+    text-shadow: 0 0 60px rgba(200,168,75,0.2);
+}}
+.hero-title span {{
+    background: linear-gradient(90deg, #c8a84b, #ffe97d, #ff9d00);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}}
+.hero-sub {{
+    font-family: 'Inter', sans-serif;
+    font-size: 0.85rem;
+    color: #555;
+    letter-spacing: 1px;
+    margin-top: 0.8rem;
+    margin-bottom: 1.8rem;
+}}
+.hero-pill {{
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(200,168,75,0.07);
+    border: 1px solid rgba(200,168,75,0.2);
+    border-radius: 999px;
+    padding: 0.4rem 1.2rem;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.8rem;
+    color: #c8a84b;
+    font-weight: 600;
+    letter-spacing: 1px;
+}}
+.hero-divider {{
+    width: 80px;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, #c8a84b, transparent);
+    margin: 1.5rem auto 0;
+    border: none;
+}}
+</style>
+
+<div class="hero-wrap">
+    <div class="hero-tag">⚡ Conquer · Dominate · Rule</div>
+    <div class="hero-title">Running<br><span>Leaderboard</span></div>
+    <div class="hero-sub">drop your gpx. claim your track. flex on everyone.</div>
+    <div class="hero-pill">📍 {total_tracks} {'track' if total_tracks == 1 else 'tracks'} being contested</div>
+    <div class="hero-divider"></div>
+</div>
+""", unsafe_allow_html=True)
+
 if not runs:
     st.info("No runs yet! Upload a GPX file from the sidebar to get started. 👈")
     st.stop()
-
-df = build_dataframe(runs)
-
-col1, col2, col3 = st.columns(3)
-col1.metric("🏃 Total Runs", len(df))
-col2.metric("📏 Total KM", f"{df['distance_km'].sum():,.1f} km")
-col3.metric("📍 Tracks Found", df["area_id"].nunique())
 
 st.divider()
 
