@@ -575,50 +575,103 @@ for _, area_row in area_totals.iterrows():
              best_pace=("pace_min_per_km", "min"))
         .reset_index()
         .sort_values("total_km", ascending=False)
-    )
+    ).reset_index(drop=True)
+
     owner = leaderboard.iloc[0]["athlete"]
     leader_km = leaderboard.iloc[0]["total_km"]
 
-    with st.expander(f"📍 **{area_name}** — 👑 {owner}", expanded=True):
-        medals = ["🥇", "🥈", "🥉"]
+    with st.expander(f"📍 {area_name}  —  👑 {owner}", expanded=True):
 
-        for rank_pos, (_, row) in enumerate(leaderboard.iterrows(), start=1):
+        # ── TOP 3 PODIUM ──
+        top3 = leaderboard.head(3)
+        n = len(top3)
+
+        # reorder: 2nd | 1st | 3rd
+        order = [1, 0, 2] if n >= 3 else ([1, 0] if n == 2 else [0])
+        cols = st.columns(3)
+
+        podium_styles = {
+            0: {"border": "#FFD700", "bg": "rgba(255,215,0,0.08)", "size": "1.8rem", "crown": "👑", "height": "180px", "label": "1st"},
+            1: {"border": "#C0C0C0", "bg": "rgba(192,192,192,0.06)", "size": "1.4rem", "crown": "🥈", "height": "150px", "label": "2nd"},
+            2: {"border": "#CD7F32", "bg": "rgba(205,127,50,0.06)", "size": "1.2rem", "crown": "🥉", "height": "140px", "label": "3rd"},
+        }
+
+        col_positions = [cols[0], cols[1], cols[2]]
+
+        for col_idx, rank_idx in enumerate(order[:n]):
+            row = top3.iloc[rank_idx]
             athlete = row["athlete"]
             athlete_km = row["total_km"]
-            is_leader = rank_pos == 1
-
+            runs_count = int(row["runs"])
+            is_leader = rank_idx == 0
             tier = get_rank(athlete_km, leader_km, is_leader)
             tier_label, *_, badge_bg, badge_fg = tier
+            s = podium_styles[rank_idx]
 
-            medal = medals[rank_pos - 1] if rank_pos <= 3 else f"#{rank_pos}"
+            initials = "".join([w[0].upper() for w in athlete.split()[:2]])
 
-            # --- Row layout ---
-            c1, c2, c3, c4 = st.columns([0.5, 3, 1.5, 1.5])
-            c1.markdown(f"<div style='font-size:1.4rem;padding-top:4px'>{medal}</div>", unsafe_allow_html=True)
-
-            # Rank badge + name
-            c2.markdown(
-                f"""<div style='display:flex; align-items:center; gap:8px; padding-top:4px;'>
-                    <span style='background:{badge_bg}; color:{badge_fg}; border-radius:6px;
-                                 padding:2px 8px; font-size:0.75rem; font-weight:700;'>{tier_label}</span>
-                    <span style='font-weight:600'>{athlete}</span>
-                </div>""",
-                unsafe_allow_html=True,
-            )
-            c3.markdown(f"<div style='padding-top:6px'>{athlete_km:.1f} km &nbsp;·&nbsp; {int(row['runs'])} runs</div>", unsafe_allow_html=True)
-
-            # AI Coach popover
-            with c4:
+            with col_positions[col_idx]:
+                st.markdown(f"""
+                <div style="
+                    background:{s['bg']};
+                    border:1.5px solid {s['border']};
+                    border-radius:16px;
+                    padding:1.2rem 1rem;
+                    text-align:center;
+                    min-height:{s['height']};
+                    display:flex; flex-direction:column; align-items:center; justify-content:center;
+                    margin-bottom:0.5rem;
+                ">
+                    <div style="font-size:1.6rem; margin-bottom:4px;">{s['crown']}</div>
+                    <div style="
+                        width:52px; height:52px; border-radius:50%;
+                        background:linear-gradient(135deg,{s['border']},#333);
+                        display:flex; align-items:center; justify-content:center;
+                        font-size:1.2rem; font-weight:700; color:#fff;
+                        margin-bottom:8px; border:2px solid {s['border']};
+                    ">{initials}</div>
+                    <div style="font-size:{s['size']}; font-weight:700; color:#fff; margin-bottom:4px;">{athlete}</div>
+                    <div style="font-size:1.1rem; font-weight:600; color:{s['border']};">{athlete_km:.1f} km</div>
+                    <div style="font-size:0.75rem; color:#888; margin-top:2px;">{runs_count} runs</div>
+                    <div style="margin-top:6px;">
+                        <span style="background:{badge_bg}; color:{badge_fg}; border-radius:6px;
+                                     padding:2px 8px; font-size:0.7rem; font-weight:700;">{tier_label}</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
                 athlete_runs_df = area_df[area_df["athlete"] == athlete]
                 render_ai_coach(athlete, athlete_runs_df)
 
-            # Progress bar (gap to leader) — skip for leader
-            if not is_leader and leader_km > 0:
-                pct = min(athlete_km / leader_km, 1.0)
+        # ── REMAINING ROWS (4th onwards) ──
+        if len(leaderboard) > 3:
+            st.markdown("<div style='margin-top:1rem;'>", unsafe_allow_html=True)
+            for rank_pos, (_, row) in enumerate(leaderboard.iloc[3:].iterrows(), start=4):
+                athlete = row["athlete"]
+                athlete_km = row["total_km"]
+                runs_count = int(row["runs"])
+                tier = get_rank(athlete_km, leader_km, False)
+                tier_label, *_, badge_bg, badge_fg = tier
+                pct = min(athlete_km / leader_km, 1.0) if leader_km > 0 else 0
                 gap = round(leader_km - athlete_km, 1)
-                st.progress(pct, text=f"  {gap} km behind the leader")
+                initials = "".join([w[0].upper() for w in athlete.split()[:2]])
 
-            st.markdown("<hr style='margin:4px 0; border-color:#333'>", unsafe_allow_html=True)
+                c1, c2, c3 = st.columns([0.5, 4, 2])
+                c1.markdown(f"<div style='font-size:1.1rem; padding-top:8px; color:#888;'>#{rank_pos}</div>", unsafe_allow_html=True)
+                c2.markdown(f"""
+                <div style='display:flex; align-items:center; gap:10px; padding:6px 0;'>
+                    <div style='width:36px; height:36px; border-radius:50%; background:#2a2a2a;
+                                display:flex; align-items:center; justify-content:center;
+                                font-size:0.85rem; font-weight:700; color:#aaa; flex-shrink:0;'>{initials}</div>
+                    <div>
+                        <div style='font-weight:600; color:#fff;'>{athlete}</div>
+                        <span style='background:{badge_bg}; color:{badge_fg}; border-radius:4px;
+                                     padding:1px 6px; font-size:0.68rem; font-weight:700;'>{tier_label}</span>
+                    </div>
+                </div>""", unsafe_allow_html=True)
+                c3.markdown(f"<div style='text-align:right; padding-top:8px; color:#c8a84b; font-weight:600;'>{athlete_km:.1f} km <span style='color:#555; font-size:0.8rem;'>· {runs_count} runs</span></div>", unsafe_allow_html=True)
+                st.progress(pct, text=f"{gap} km behind leader")
+                st.markdown("<hr style='margin:4px 0; border-color:#222;'>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
 
 st.divider()
 
