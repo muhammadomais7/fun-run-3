@@ -25,8 +25,6 @@ from streamlit_folium import st_folium
 # ──────────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Runova", page_icon="⚡", layout="wide")
 
-# NOTE: Replace the background-image URL below with your actual dragon background
-# (either a raw GitHub URL or keep as base64 by pasting your original base64 string)
 st.markdown("""
 <style>
 .stApp {
@@ -93,12 +91,12 @@ def load_profiles():     return load_json(PROFILES_FILE, {})
 def save_profiles(p):    save_json(PROFILES_FILE, p)
 
 # ──────────────────────────────────────────────────────────────────────────
-# Avatar helper — photo if available, else coloured initials circle
+# Avatar helper
 # ──────────────────────────────────────────────────────────────────────────
 def avatar_html(athlete, profiles, size=44, border_color="#c8a84b"):
     profile = profiles.get(athlete, {})
     if isinstance(profile, str):
-        profile = {"email": profile, "photo_b64": "", "trash_talk": ""}
+        profile = {"email": profile, "photo_b64": "", "message": ""}
     photo_b64 = profile.get("photo_b64", "")
     initials = "".join([w[0].upper() for w in athlete.split()[:2]])
 
@@ -414,9 +412,10 @@ athlete_email = st.sidebar.text_input("Your email (for notifications)", placehol
 profile_pic   = st.sidebar.file_uploader(
     "Profile picture (optional)", type=["jpg", "jpeg", "png"], key="profile_pic_upload"
 )
-trash_talk    = st.sidebar.text_input(
-    "Trash-talk message 🗣️", placeholder="e.g. Can't catch me 😤",
-    help="Shows on the map when you own a track."
+# RENAMED: "Trash-talk message" → "Message"
+message_text  = st.sidebar.text_input(
+    "Message 💬", placeholder="e.g. Can't catch me 😤",
+    help="Shows on the map bubble when you own a track."
 )
 uploaded_files = st.sidebar.file_uploader(
     "Upload GPX file(s)", type=["gpx"], accept_multiple_files=True
@@ -433,16 +432,16 @@ if st.sidebar.button("Add to Leaderboard", type="primary"):
         df_before = build_dataframe(runs) if runs else pd.DataFrame()
         leaders_before = snapshot_leaders(df_before)
 
-        # Save/update profile as nested dict
         profiles = load_profiles()
         existing = profiles.get(athlete_name.strip(), {})
         if isinstance(existing, str):
-            existing = {"email": existing, "photo_b64": "", "trash_talk": ""}
+            existing = {"email": existing, "photo_b64": "", "message": ""}
 
         if athlete_email.strip():
             existing["email"] = athlete_email.strip()
-        if trash_talk.strip():
-            existing["trash_talk"] = trash_talk.strip()
+        # Store as "message" key (was "trash_talk")
+        if message_text.strip():
+            existing["message"] = message_text.strip()
         if profile_pic is not None:
             raw = profile_pic.read()
             existing["photo_b64"] = base64.b64encode(raw).decode()
@@ -551,7 +550,7 @@ for track, pos, ath in rank_ups_now:
 # ──────────────────────────────────────────────────────────────────────────
 runs     = load_runs()
 df       = build_dataframe(runs) if runs else pd.DataFrame()
-profiles = load_profiles()   # load once, pass everywhere
+profiles = load_profiles()
 
 total_tracks = df["area_id"].nunique() if not df.empty else 0
 
@@ -622,7 +621,6 @@ for _, area_row in area_totals.iterrows():
 
     with st.expander(f"📍 {area_name}  —  👑 {owner}", expanded=True):
 
-        # ── TOP 3 PODIUM ──
         top3 = leaderboard.head(3)
         n    = len(top3)
         order = [1, 0, 2] if n >= 3 else ([1, 0] if n == 2 else [0])
@@ -663,7 +661,6 @@ for _, area_row in area_totals.iterrows():
                 </div>""", unsafe_allow_html=True)
                 render_ai_coach(athlete, area_df[area_df["athlete"] == athlete])
 
-        # ── 4th+ ROWS ──
         if len(leaderboard) > 3:
             st.markdown("<div style='margin-top:1rem;'>", unsafe_allow_html=True)
             for rank_pos, (_, row) in enumerate(leaderboard.iloc[3:].iterrows(), start=4):
@@ -721,48 +718,148 @@ for _, run in df.iterrows():
 from folium.plugins import HeatMap
 from folium import FeatureGroup, LayerControl
 
-# Build area summary list
+# ── Build area summary list ──
 area_summaries = []
 for area_id, area_name in df.groupby("area_id")["area_name"].first().items():
     sub       = df[df["area_id"] == area_id]
     owner_row = sub.groupby("athlete")["distance_km"].sum().sort_values(ascending=False)
     lb        = owner_row.reset_index().head(3)
     area_summaries.append({
-        "area_id": area_id, "area_name": area_name,
-        "lat": sub["centroid_lat"].mean(), "lon": sub["centroid_lon"].mean(),
-        "owner": owner_row.index[0], "owner_km": owner_row.iloc[0],
+        "area_id":    area_id,
+        "area_name":  area_name,
+        "lat":        sub["centroid_lat"].mean(),
+        "lon":        sub["centroid_lon"].mean(),
+        "owner":      owner_row.index[0],
+        "owner_km":   float(owner_row.iloc[0]),
         "leaderboard": lb,
     })
-area_summaries.sort(key=lambda a: a["owner_km"])
+
+# ── Compute bubble radii (metres) scaled by owner_km ──
+# Bigger km → bigger circle. Min 120 m, max 600 m.
+all_km = [a["owner_km"] for a in area_summaries]
+max_km = max(all_km) if all_km else 1.0
+MIN_R, MAX_R = 120, 600
+
+def km_to_radius(km):
+    ratio = (km / max_km) ** 0.5          # sqrt for area-proportional feel
+    return MIN_R + ratio * (MAX_R - MIN_R)
+
+for a in area_summaries:
+    a["radius_m"] = km_to_radius(a["owner_km"])
+
+# ── Non-overlap: sort largest first; push smaller circles to not overlap ──
+# Convert lat/lon offset so smaller circles sit at the edge of the larger one.
+DEG_PER_M_LAT = 1.0 / 111_320
+
+area_summaries.sort(key=lambda a: a["owner_km"], reverse=True)
+
+placed = []   # list of (lat, lon, radius_m)
+
+def haversine_m(lat1, lon1, lat2, lon2):
+    R = 6_371_000
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
+    return R * 2 * math.asin(math.sqrt(a))
+
+for a in area_summaries:
+    lat, lon = a["lat"], a["lon"]
+    r = a["radius_m"]
+    deg_per_m_lon = 1.0 / (111_320 * math.cos(math.radians(lat)))
+
+    # Check against every already-placed circle
+    for (plat, plon, pr) in placed:
+        dist = haversine_m(lat, lon, plat, plon)
+        min_sep = pr + r         # circles must not overlap
+        if dist < min_sep and dist > 0:
+            # Push current circle away from the placed one
+            # along the vector connecting their centres
+            push = min_sep - dist + 5   # 5 m buffer
+            angle = math.atan2(lat - plat, lon - plon)
+            lat += push * math.cos(angle) * DEG_PER_M_LAT
+            lon += push * math.sin(angle) * deg_per_m_lon
+
+    a["display_lat"] = lat
+    a["display_lon"] = lon
+    placed.append((lat, lon, r))
 
 # ── Ownership layer ──
 ownership_layer = FeatureGroup(name="👑 Ownership", show=True)
 
-OFFSET_DEG = 0.003
-placed = []
-
-def get_offset(lat, lon):
-    nudge = 0
-    for (plat, plon) in placed:
-        dist = ((lat - plat)**2 + (lon - plon)**2) ** 0.5
-        if dist < OFFSET_DEG * 2:
-            nudge += OFFSET_DEG
-    placed.append((lat + nudge, lon))
-    return nudge
+# Tier colours for circle border
+TIER_COLORS = {
+    "👑 Conqueror": "#FFD700",
+    "💎 Diamond":   "#7ef0ff",
+    "🟣 Platinum":  "#c9a0ff",
+    "🟡 Gold":      "#ffe566",
+    "⚪ Silver":    "#c8c8c8",
+    "🟤 Bronze":    "#e0a060",
+}
 
 for a in area_summaries:
-    nudge       = get_offset(a["lat"], a["lon"])
-    display_lat = a["lat"] + nudge
-    owner       = a["owner"]
+    owner      = a["owner"]
+    owner_km   = a["owner_km"]
+    area_name  = a["area_name"]
+    dlat       = a["display_lat"]
+    dlon       = a["display_lon"]
+    radius_m   = a["radius_m"]
 
-    # Pull owner profile
     owner_profile  = profiles.get(owner, {})
     if isinstance(owner_profile, str):
-        owner_profile = {"email": owner_profile, "photo_b64": "", "trash_talk": ""}
-    owner_photo_b64   = owner_profile.get("photo_b64", "")
-    owner_trash_talk  = owner_profile.get("trash_talk", "")
+        owner_profile = {"email": owner_profile, "photo_b64": "", "message": ""}
+    owner_message  = owner_profile.get("message", "") or owner_profile.get("trash_talk", "")
+    owner_photo_b64 = owner_profile.get("photo_b64", "")
 
-    # Avatar HTML for popup
+    # Rank tier for colour
+    tier       = get_rank(owner_km, owner_km, True)   # always conqueror for the owner bubble
+    tier_label = tier[0]
+    ring_color = TIER_COLORS.get(tier_label, "#FFD700")
+
+    # ── Folium Circle (the bubble) ──
+    folium.Circle(
+        location=[dlat, dlon],
+        radius=radius_m,
+        color=ring_color,
+        weight=2.5,
+        fill=True,
+        fill_color=ring_color,
+        fill_opacity=0.10,
+    ).add_to(ownership_layer)
+
+    # ── DivIcon label centred inside the circle ──
+    # Three lines: crown+name, km, optional message
+    msg_line = ""
+    if owner_message:
+        safe_msg = owner_message[:40].replace("<","&lt;").replace(">","&gt;")
+        msg_line = f'<div style="font-size:10px;color:#e94560;font-style:italic;margin-top:2px;">💬 {safe_msg}</div>'
+
+    label_html = f"""
+    <div style="
+        display:flex; flex-direction:column; align-items:center; justify-content:center;
+        text-align:center; pointer-events:none;
+        text-shadow: 0 1px 3px #000, 0 0 6px #000;
+    ">
+        <div style="font-size:13px; font-weight:800; color:#FFD700; letter-spacing:0.5px; white-space:nowrap;">
+            👑 {owner}
+        </div>
+        <div style="font-size:11px; font-weight:600; color:#fff; margin-top:1px;">
+            {owner_km:.1f} km
+        </div>
+        {msg_line}
+    </div>
+    """
+
+    # icon_size / icon_anchor keep the label centred at (dlat, dlon)
+    folium.Marker(
+        location=[dlat, dlon],
+        icon=folium.DivIcon(
+            html=label_html,
+            icon_size=(180, 54),
+            icon_anchor=(90, 27),   # centre of the div
+        ),
+    ).add_to(ownership_layer)
+
+    # ── Popup (click the circle or label) ──
     initials = "".join([w[0].upper() for w in owner.split()[:2]])
     if owner_photo_b64:
         avatar_popup = (
@@ -779,23 +876,21 @@ for a in area_summaries:
             f'margin:0 auto 6px;border:2px solid #FFD700;">{initials}</div>'
         )
 
-    # Trash-talk bubble
-    trash_html = ""
-    if owner_trash_talk:
-        safe_talk = owner_trash_talk.replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
-        trash_html = (
+    msg_popup = ""
+    if owner_message:
+        safe_msg = owner_message.replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;")
+        msg_popup = (
             f'<div style="background:#1a1a1a;border-left:3px solid #e94560;'
             f'border-radius:6px;padding:5px 8px;margin-top:8px;'
             f'font-size:0.8rem;color:#e94560;font-style:italic;">'
-            f'💬 &ldquo;{safe_talk}&rdquo;</div>'
+            f'💬 &ldquo;{safe_msg}&rdquo;</div>'
         )
 
-    # Leaderboard rows
-    lb_rows  = ""
-    medals   = ["🥇","🥈","🥉"]
+    lb_rows = ""
+    medals  = ["🥇","🥈","🥉"]
     for i, (_, row) in enumerate(a["leaderboard"].iterrows()):
         lb_rows += (
-            f"<tr><td style='padding:2px 4px;'>{medals[i] if i < 3 else i+1}</td>"
+            f"<tr><td style='padding:2px 4px;'>{medals[i] if i<3 else i+1}</td>"
             f"<td style='padding:2px 4px;'><b>{row['athlete']}</b></td>"
             f"<td style='padding:2px 4px;'>{row['distance_km']:.1f} km</td></tr>"
         )
@@ -804,7 +899,7 @@ for a in area_summaries:
     <div style="font-family:sans-serif;min-width:220px;max-width:270px;">
         <div style="background:#1a1a1a;color:#c8a84b;padding:8px 12px;
                     border-radius:6px 6px 0 0;font-weight:800;font-size:1rem;letter-spacing:1px;">
-            📍 {a['area_name']}
+            📍 {area_name}
         </div>
         <div style="padding:10px 12px;background:#111;border-radius:0 0 6px 6px;">
             {avatar_popup}
@@ -812,9 +907,9 @@ for a in area_summaries:
                 👑 {owner}
             </div>
             <div style="text-align:center;color:#888;font-size:0.75rem;margin-bottom:6px;">
-                {a['owner_km']:.1f} km total
+                {owner_km:.1f} km total
             </div>
-            {trash_html}
+            {msg_popup}
             <hr style="border-color:#333;margin:8px 0;" />
             <table style="width:100%;border-collapse:collapse;color:#fff;font-size:0.82rem;">
                 {lb_rows}
@@ -823,36 +918,23 @@ for a in area_summaries:
     </div>
     """
 
-    # Floating label — include first 30 chars of trash-talk if set
-    trash_preview = ""
-    if owner_trash_talk:
-        short = owner_trash_talk[:30] + ("…" if len(owner_trash_talk) > 30 else "")
-        safe  = short.replace("<","&lt;").replace(">","&gt;")
-        trash_preview = f'<br><span style="font-size:9px;color:#e94560;font-style:italic;">💬 {safe}</span>'
-
-    icon_html = f"""
-    <div style="background:linear-gradient(135deg,#1a1200,#2a2000);border:2px solid #c8a84b;
-                border-radius:8px;padding:5px 10px;color:#c8a84b;font-family:sans-serif;
-                font-size:13px;font-weight:800;white-space:nowrap;
-                box-shadow:0 2px 8px rgba(0,0,0,0.6);letter-spacing:0.5px;">
-        👑 {owner} &nbsp;·&nbsp; {a['area_name']}<br>
-        <span style="font-size:10px;color:#e8c87a;font-weight:600;">{a['owner_km']:.1f} km</span>
-        {trash_preview}
-    </div>
-    """
-
-    folium.Marker(
-        location=[display_lat, a["lon"]],
-        icon=folium.DivIcon(html=icon_html, icon_size=(250, 65), icon_anchor=(125, 32)),
+    # Attach popup to the circle
+    folium.Circle(
+        location=[dlat, dlon],
+        radius=radius_m,
+        color="transparent",
+        fill=True,
+        fill_color="transparent",
+        fill_opacity=0,
         popup=folium.Popup(popup_html, max_width=290),
-        tooltip=f"Click for leaderboard — {a['area_name']}",
+        tooltip=f"👑 {owner} · {owner_km:.1f} km — click for details",
     ).add_to(ownership_layer)
 
 ownership_layer.add_to(m)
 
 # ── Heatmap layer ──
-heat_layer   = FeatureGroup(name="🔥 Activity Heatmap", show=False)
-heat_points  = []
+heat_layer  = FeatureGroup(name="🔥 Activity Heatmap", show=False)
+heat_points = []
 for _, run in df.iterrows():
     for pt in run["points"]:
         heat_points.append([pt[0], pt[1]])
