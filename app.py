@@ -388,32 +388,109 @@ def call_groq(prompt):
     return None
 
 def render_ai_coach(athlete, athlete_df, area_id=""):
-    cache_key = f"coach_{athlete}_{area_id}"
+    chat_key = f"chat_{athlete}_{area_id}"
+    input_key = f"chat_input_{athlete}_{area_id}"
+
     with st.popover("🤖 AI Coach"):
-        if cache_key not in st.session_state:
-            if not GROQ_KEY:
-                st.info("Add GROQ_API_KEY to Streamlit secrets to enable AI coaching.")
-                return
-            if st.button("✨ Generate coaching advice", key=f"gen_{athlete}_{area_id}"):
-                summary = build_athlete_summary(athlete_df)
-                prompt = (
-                    f"You are a friendly running coach. Here are the stats for runner '{athlete}':\n"
-                    f"{json.dumps(summary, indent=2)}\n\n"
-                    "In 3-4 short bullet points, tell them what they're doing well and give one specific "
-                    "tip to improve. Be encouraging but honest. Use plain language, no jargon."
-                )
-                with st.spinner("Thinking..."):
-                    result = call_groq(prompt)
-                if result:
-                    st.session_state[cache_key] = result
-                    st.rerun()
-                else:
-                    st.error("Couldn't reach Groq — check your GROQ_API_KEY.")
+        if not GROQ_KEY:
+            st.info("Add GROQ_API_KEY to Streamlit secrets to enable AI coaching.")
+            return
+
+        # Initialise chat history with a system-style greeting on first open
+        if chat_key not in st.session_state:
+            summary = build_athlete_summary(athlete_df)
+            system_prompt = (
+                f"You are an expert, friendly running coach. "
+                f"You are coaching {athlete}. Here are their current stats:\n"
+                f"{json.dumps(summary, indent=2)}\n\n"
+                "Keep replies concise (3-5 sentences max). Be encouraging, practical, "
+                "and personalised to their data. Use plain language, no jargon."
+            )
+            st.session_state[chat_key] = {
+                "system": system_prompt,
+                "messages": [],   # list of {"role": "user"/"assistant", "content": "..."}
+            }
+
+        chat_state = st.session_state[chat_key]
+
+        # ── Render chat history ──
+        st.markdown(
+            "<div style='font-size:0.78rem;color:#c8a84b;font-weight:700;"
+            "letter-spacing:1px;margin-bottom:6px;'>🤖 COACH CHAT</div>",
+            unsafe_allow_html=True
+        )
+
+        if not chat_state["messages"]:
+            st.markdown(
+                "<div style='color:#888;font-size:0.82rem;font-style:italic;'>"
+                "Ask your coach anything about your training…</div>",
+                unsafe_allow_html=True
+            )
         else:
-            st.markdown(st.session_state[cache_key])
-            if st.button("🔄 Regenerate", key=f"regen_{athlete}_{area_id}"):
-                del st.session_state[cache_key]
-                st.rerun()
+            for msg in chat_state["messages"]:
+                if msg["role"] == "user":
+                    st.markdown(
+                        f"<div style='background:rgba(200,168,75,0.12);border-radius:10px;"
+                        f"padding:7px 10px;margin:4px 0;font-size:0.83rem;color:#ffe97d;'>"
+                        f"🧑 {msg['content']}</div>",
+                        unsafe_allow_html=True
+                    )
+                else:
+                    st.markdown(
+                        f"<div style='background:rgba(255,255,255,0.05);border-radius:10px;"
+                        f"padding:7px 10px;margin:4px 0;font-size:0.83rem;color:#e0e0e0;'>"
+                        f"🤖 {msg['content']}</div>",
+                        unsafe_allow_html=True
+                    )
+
+        # ── Input box ──
+        user_input = st.text_input(
+            "Your message",
+            key=input_key,
+            placeholder="e.g. How do I improve my pace?",
+            label_visibility="collapsed"
+        )
+
+        col_send, col_clear = st.columns([3, 1])
+        send = col_send.button("Send ➤", key=f"send_{athlete}_{area_id}", use_container_width=True)
+        clear = col_clear.button("🗑️", key=f"clear_{athlete}_{area_id}", use_container_width=True)
+
+        if clear:
+            del st.session_state[chat_key]
+            st.rerun()
+
+        if send and user_input.strip():
+            chat_state["messages"].append({"role": "user", "content": user_input.strip()})
+
+            # Build messages array for Groq: system injected as first user turn
+            groq_messages = [
+                {"role": "user", "content": chat_state["system"]},
+                {"role": "assistant", "content": "Got it! I have your stats and I'm ready to coach you."},
+            ]
+            for m in chat_state["messages"]:
+                groq_messages.append({"role": m["role"], "content": m["content"]})
+
+            with st.spinner("Coach is thinking…"):
+                try:
+                    resp = requests.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
+                        json={
+                            "model": "llama-3.3-70b-versatile",
+                            "messages": groq_messages,
+                            "max_tokens": 300,
+                        },
+                        timeout=20,
+                    )
+                    if resp.ok:
+                        reply = resp.json()["choices"][0]["message"]["content"]
+                    else:
+                        reply = "Sorry, I couldn't reach the coaching server. Try again!"
+                except Exception:
+                    reply = "Network error — please try again."
+
+            chat_state["messages"].append({"role": "assistant", "content": reply})
+            st.rerun()
 
 # ──────────────────────────────────────────────────────────────────────────
 # Sidebar — upload form
@@ -795,18 +872,26 @@ for a in area_summaries:
     a["display_lon"] = lon
     placed.append((lat, lon, r))
 
+# ── Per-area bubble colour palette (distinct colours) ──
+BUBBLE_PALETTE = [
+    "#FFD700",  # gold
+    "#00CFFF",  # cyan
+    "#FF4ECD",  # pink/magenta
+    "#39FF14",  # neon green
+    "#FF6B35",  # orange
+    "#A855F7",  # purple
+    "#00FFB3",  # mint
+    "#FF3A3A",  # red
+    "#4FC3F7",  # sky blue
+    "#FFAA00",  # amber
+]
+area_bubble_color = {
+    a["area_id"]: BUBBLE_PALETTE[i % len(BUBBLE_PALETTE)]
+    for i, a in enumerate(area_summaries)
+}
+
 # ── Ownership layer ──
 ownership_layer = FeatureGroup(name="👑 Ownership", show=True)
-
-# Tier colours for circle border
-TIER_COLORS = {
-    "👑 Conqueror": "#FFD700",
-    "💎 Diamond":   "#7ef0ff",
-    "🟣 Platinum":  "#c9a0ff",
-    "🟡 Gold":      "#ffe566",
-    "⚪ Silver":    "#c8c8c8",
-    "🟤 Bronze":    "#e0a060",
-}
 
 for a in area_summaries:
     owner      = a["owner"]
@@ -822,10 +907,8 @@ for a in area_summaries:
     owner_message  = owner_profile.get("message", "") or owner_profile.get("trash_talk", "")
     owner_photo_b64 = owner_profile.get("photo_b64", "")
 
-    # Rank tier for colour
-    tier       = get_rank(owner_km, owner_km, True)   # always conqueror for the owner bubble
-    tier_label = tier[0]
-    ring_color = TIER_COLORS.get(tier_label, "#FFD700")
+    # Per-area unique colour
+    ring_color = area_bubble_color.get(a["area_id"], "#FFD700")
 
     # ── Folium Circle (the bubble) ──
     folium.Circle(
