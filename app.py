@@ -387,14 +387,14 @@ def call_groq(prompt):
         pass
     return None
 
-def render_ai_coach(athlete, athlete_df):
-    cache_key = f"coach_{athlete}"
+def render_ai_coach(athlete, athlete_df, area_id=""):
+    cache_key = f"coach_{athlete}_{area_id}"
     with st.popover("🤖 AI Coach"):
         if cache_key not in st.session_state:
             if not GROQ_KEY:
                 st.info("Add GROQ_API_KEY to Streamlit secrets to enable AI coaching.")
                 return
-            if st.button("✨ Generate coaching advice", key=f"gen_{athlete}"):
+            if st.button("✨ Generate coaching advice", key=f"gen_{athlete}_{area_id}"):
                 summary = build_athlete_summary(athlete_df)
                 prompt = (
                     f"You are a friendly running coach. Here are the stats for runner '{athlete}':\n"
@@ -411,7 +411,7 @@ def render_ai_coach(athlete, athlete_df):
                     st.error("Couldn't reach Groq — check your GROQ_API_KEY.")
         else:
             st.markdown(st.session_state[cache_key])
-            if st.button("🔄 Regenerate", key=f"regen_{athlete}"):
+            if st.button("🔄 Regenerate", key=f"regen_{athlete}_{area_id}"):
                 del st.session_state[cache_key]
                 st.rerun()
 
@@ -671,7 +671,7 @@ for _, area_row in area_totals.iterrows():
                                      padding:2px 8px;font-size:0.7rem;font-weight:700;">{tier_label}</span>
                     </div>
                 </div>""", unsafe_allow_html=True)
-                render_ai_coach(athlete, area_df[area_df["athlete"] == athlete])
+                render_ai_coach(athlete, area_df[area_df["athlete"] == athlete], area_id=area_id)
 
         if len(leaderboard) > 3:
             st.markdown("<div style='margin-top:1rem;'>", unsafe_allow_html=True)
