@@ -544,7 +544,6 @@ if st.sidebar.button("🧪 Test n8n webhook"):
 
 if st.sidebar.button("🗑️ Reset all data"):
     save_runs([])
-    save_area_cache({})
     save_profiles({})
     for k in list(st.session_state.keys()):
         del st.session_state[k]
