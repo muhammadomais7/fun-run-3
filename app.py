@@ -508,6 +508,10 @@ st.sidebar.caption(
     "- **Garmin Connect**: activity → gear → Export to GPX\n"
     "- **Any GPS app**: look for 'Export' or 'Share as GPX'"
 )
+if st.sidebar.button("🧪 Test n8n webhook"):
+    result = fire_overtake_email("your@email.com", "TestUser", "Test Track", "Rival")
+    st.sidebar.success("Webhook fired! Check n8n executions tab.")
+
 if st.sidebar.button("🗑️ Reset all data"):
     save_runs([])
     save_area_cache({})
