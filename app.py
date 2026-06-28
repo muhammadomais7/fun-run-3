@@ -799,32 +799,104 @@ for _, run in df.iterrows():
             tooltip=f"{run['athlete']} — {run['distance_km']} km",
         ).add_to(m)
 
+from folium.plugins import HeatMap
+from folium import FeatureGroup, LayerControl
+
 area_summaries = []
 for area_id, area_name in df.groupby("area_id")["area_name"].first().items():
     sub = df[df["area_id"] == area_id]
     owner_row = sub.groupby("athlete")["distance_km"].sum().sort_values(ascending=False)
+    lb = owner_row.reset_index().head(3)
     area_summaries.append({
         "area_id": area_id, "area_name": area_name,
         "lat": sub["centroid_lat"].mean(), "lon": sub["centroid_lon"].mean(),
         "owner": owner_row.index[0], "owner_km": owner_row.iloc[0],
+        "leaderboard": lb,
     })
 area_summaries.sort(key=lambda a: a["owner_km"])
 
-MIN_R, MAX_R = 10, 32
-max_km = max(a["owner_km"] for a in area_summaries) or 1
+# ── Ownership layer ──
+ownership_layer = FeatureGroup(name="👑 Ownership", show=True)
+
+# detect and offset vertically overlapping labels
+OFFSET_DEG = 0.003
+placed = []
+def get_offset(lat, lon):
+    nudge = 0
+    for (plat, plon) in placed:
+        dist = ((lat - plat)**2 + (lon - plon)**2) ** 0.5
+        if dist < OFFSET_DEG * 2:
+            nudge += OFFSET_DEG
+    placed.append((lat + nudge, lon))
+    return nudge
 
 for a in area_summaries:
-    scale = math.sqrt(a["owner_km"] / max_km)
-    radius = MIN_R + scale * (MAX_R - MIN_R)
-    folium.CircleMarker(
-        location=[a["lat"], a["lon"]], radius=radius,
-        color=area_color_map[a["area_id"]], fill=True,
-        fill_color=area_color_map[a["area_id"]], fill_opacity=0.75, weight=2,
-        popup=f"<b>{a['area_name']}</b><br>👑 {a['owner']} — {a['owner_km']:.1f} km",
-        tooltip=f"{a['area_name']} — 👑 {a['owner']} ({a['owner_km']:.1f} km)",
-    ).add_to(m)
+    nudge = get_offset(a["lat"], a["lon"])
+    display_lat = a["lat"] + nudge
 
-st_folium(m, width=None, height=500)
+    # Build mini leaderboard HTML for popup
+    lb_rows = ""
+    medals = ["🥇", "🥈", "🥉"]
+    for i, (_, row) in enumerate(a["leaderboard"].iterrows()):
+        lb_rows += f"<tr><td>{medals[i] if i < 3 else i+1}</td><td><b>{row['athlete']}</b></td><td>{row['distance_km']:.1f} km</td></tr>"
+
+    popup_html = f"""
+    <div style="font-family:sans-serif; min-width:200px;">
+        <div style="background:#1a1a1a; color:#c8a84b; padding:8px 12px; border-radius:6px 6px 0 0;
+                    font-weight:800; font-size:1rem; letter-spacing:1px;">
+            📍 {a['area_name']}
+        </div>
+        <div style="padding:8px 12px; background:#111; border-radius:0 0 6px 6px;">
+            <table style="width:100%; border-collapse:collapse; color:#fff; font-size:0.85rem;">
+                {lb_rows}
+            </table>
+        </div>
+    </div>
+    """
+
+    # Large bold DivIcon label
+    icon_html = f"""
+    <div style="
+        background: linear-gradient(135deg, #1a1200, #2a2000);
+        border: 2px solid #c8a84b;
+        border-radius: 8px;
+        padding: 5px 10px;
+        color: #c8a84b;
+        font-family: sans-serif;
+        font-size: 13px;
+        font-weight: 800;
+        white-space: nowrap;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.6);
+        letter-spacing: 0.5px;
+    ">
+        👑 {a['owner']} &nbsp;·&nbsp; {a['area_name']}<br>
+        <span style="font-size:10px; color:#e8c87a; font-weight:600;">{a['owner_km']:.1f} km</span>
+    </div>
+    """
+
+    folium.Marker(
+        location=[display_lat, a["lon"]],
+        icon=folium.DivIcon(html=icon_html, icon_size=(220, 50), icon_anchor=(110, 25)),
+        popup=folium.Popup(popup_html, max_width=250),
+        tooltip=f"Click for leaderboard — {a['area_name']}",
+    ).add_to(ownership_layer)
+
+ownership_layer.add_to(m)
+
+# ── Heatmap layer ──
+heat_layer = FeatureGroup(name="🔥 Activity Heatmap", show=False)
+heat_points = []
+for _, run in df.iterrows():
+    for pt in run["points"]:
+        heat_points.append([pt[0], pt[1]])
+if heat_points:
+    HeatMap(heat_points, radius=12, blur=10, min_opacity=0.4).add_to(heat_layer)
+heat_layer.add_to(m)
+
+# Layer toggle control
+LayerControl(collapsed=False).add_to(m)
+
+st_folium(m, width=None, height=520)
 
 st.divider()
 with st.expander("📋 All uploaded runs"):
