@@ -157,15 +157,31 @@ def get_area_name(lat, lon, cache):
     try:
         resp = requests.get(
             NOMINATIM_URL,
-            params={"lat": lat, "lon": lon, "format": "json", "zoom": 17},
+            params={"lat": lat, "lon": lon, "format": "json", "zoom": 16},
             headers=NOMINATIM_HEADERS, timeout=5,
         )
         if resp.ok:
             data = resp.json()
             addr = data.get("address", {})
-            name = (addr.get("leisure") or addr.get("park") or addr.get("road")
-                    or addr.get("suburb") or addr.get("neighbourhood")
-                    or data.get("display_name", name).split(",")[0])
+            # Try increasingly broad fields until we get something useful
+            name = (
+                addr.get("leisure")
+                or addr.get("amenity")
+                or addr.get("tourism")
+                or addr.get("park")
+                or addr.get("natural")
+                or addr.get("road")
+                or addr.get("pedestrian")
+                or addr.get("path")
+                or addr.get("neighbourhood")
+                or addr.get("suburb")
+                or addr.get("village")
+                or addr.get("town")
+                or addr.get("city_district")
+                or addr.get("county")
+                or addr.get("city")
+                or data.get("display_name", name).split(",")[0]
+            )
     except Exception:
         pass
     cache[key] = name
@@ -509,8 +525,22 @@ st.sidebar.caption(
     "- **Any GPS app**: look for 'Export' or 'Share as GPX'"
 )
 if st.sidebar.button("🧪 Test n8n webhook"):
-    result = fire_overtake_email("your@email.com", "TestUser", "Test Track", "Rival")
-    st.sidebar.success("Webhook fired! Check n8n executions tab.")
+    if not N8N_WEBHOOK:
+        st.sidebar.error("N8N_WEBHOOK_URL not found in secrets!")
+    else:
+        try:
+            r = requests.post(N8N_WEBHOOK, json={
+                "to_email": "test@test.com",
+                "to_name": "TestUser",
+                "track_name": "Test Track",
+                "new_leader": "Rival",
+                "motivation_line": "Test message"
+            }, timeout=10)
+            st.sidebar.write(f"Status: {r.status_code}")
+            st.sidebar.write(f"URL used: {N8N_WEBHOOK}")
+            st.sidebar.write(f"Response: {r.text[:200]}")
+        except Exception as e:
+            st.sidebar.error(f"Error: {e}")
 
 if st.sidebar.button("🗑️ Reset all data"):
     save_runs([])
