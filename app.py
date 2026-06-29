@@ -396,7 +396,7 @@ def render_ai_coach(athlete, athlete_df, area_id=""):
             st.info("Add GROQ_API_KEY to Streamlit secrets to enable AI coaching.")
             return
 
-        # Initialise chat history with a system-style greeting on first open
+        # Initialise chat history and auto-generate opening advice
         if chat_key not in st.session_state:
             summary = build_athlete_summary(athlete_df)
             system_prompt = (
@@ -408,10 +408,46 @@ def render_ai_coach(athlete, athlete_df, area_id=""):
             )
             st.session_state[chat_key] = {
                 "system": system_prompt,
-                "messages": [],   # list of {"role": "user"/"assistant", "content": "..."}
+                "messages": [],
+                "opening_done": False,
             }
 
+        # Auto-generate opening advice if not done yet
         chat_state = st.session_state[chat_key]
+        if not chat_state.get("opening_done"):
+            summary = build_athlete_summary(athlete_df)
+            opening_prompt = (
+                f"You are an expert, friendly running coach. "
+                f"Here are the stats for {athlete}:\n"
+                f"{json.dumps(summary, indent=2)}\n\n"
+                "Give a short personalised opening assessment in exactly 2 parts:\n"
+                "1. **What you\'re doing well** — 2 bullet points max\n"
+                "2. **What to work on** — 2 bullet points max\n"
+                "Be specific to their data. Keep it under 120 words total. "
+                "End with one encouraging sentence inviting them to ask questions."
+            )
+            with st.spinner("Coach is preparing your assessment…"):
+                try:
+                    resp = requests.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
+                        json={
+                            "model": "llama-3.3-70b-versatile",
+                            "messages": [{"role": "user", "content": opening_prompt}],
+                            "max_tokens": 300,
+                        },
+                        timeout=20,
+                    )
+                    if resp.ok:
+                        opening = resp.json()["choices"][0]["message"]["content"]
+                    else:
+                        opening = "Hey! I\'m your coach. Ask me anything about your training."
+                except Exception:
+                    opening = "Hey! I\'m your coach. Ask me anything about your training."
+
+            chat_state["messages"].append({"role": "assistant", "content": opening})
+            chat_state["opening_done"] = True
+            st.rerun()
 
         # ── Render chat history ──
         st.markdown(
