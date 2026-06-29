@@ -531,6 +531,169 @@ def render_ai_coach(athlete, athlete_df, area_id=""):
             chat_state["messages"].append({"role": "assistant", "content": reply})
             st.rerun()
 
+
+# ──────────────────────────────────────────────────────────────────────────
+# Badges
+# ──────────────────────────────────────────────────────────────────────────
+BADGES = [
+    ("🏅 First Steps",    "Completed your first run",                lambda s: s["total_runs"] >= 1),
+    ("🔟 10K Club",       "Ran 10 km total",                         lambda s: s["total_km"] >= 10),
+    ("💯 Century",        "Ran 100 km total",                        lambda s: s["total_km"] >= 100),
+    ("⚡ Speed Demon",    "Avg pace under 5 min/km",                 lambda s: s["avg_pace_min_per_km"] is not None and s["avg_pace_min_per_km"] < 5),
+    ("🐢 Iron Legs",      "Completed 10+ runs",                      lambda s: s["total_runs"] >= 10),
+    ("🚀 Rocket Start",   "Best pace under 4 min/km",                lambda s: s["best_pace_min_per_km"] is not None and s["best_pace_min_per_km"] < 4),
+    ("📈 Improving",      "Pace trend is improving",                 lambda s: s["pace_trend"] == "improving"),
+    ("🏃 Marathon Mark",  "Ran 42+ km total",                        lambda s: s["total_km"] >= 42),
+    ("🌟 Streak King",    "Ran more than 5 times",                   lambda s: s["total_runs"] > 5),
+    ("👑 Conqueror",      "Leader on at least one track",            lambda s: s.get("is_leader", False)),
+]
+
+def compute_badges(summary):
+    earned = []
+    for name, desc, check in BADGES:
+        try:
+            if check(summary):
+                earned.append((name, desc))
+        except Exception:
+            pass
+    return earned
+
+def render_badges(badges, size="1.6rem"):
+    if not badges:
+        return "<span style='color:#555;font-size:0.8rem;'>No badges yet — keep running!</span>"
+    html = "<div style='display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;'>"
+    for name, desc in badges:
+        html += (
+            f"<div title='{desc}' style='background:rgba(200,168,75,0.1);border:1px solid rgba(200,168,75,0.3);"
+            f"border-radius:8px;padding:4px 10px;font-size:0.78rem;color:#ffe97d;cursor:default;"
+            f"white-space:nowrap;'>{name}</div>"
+        )
+    html += "</div>"
+    return html
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Head-to-Head rivalry
+# ──────────────────────────────────────────────────────────────────────────
+def call_h2h_coach(athlete_a, summary_a, athlete_b, summary_b):
+    if not GROQ_KEY:
+        return None
+    prompt = (
+        f"You are a competitive running coach analysing a rivalry between two runners.\n\n"
+        f"Runner A — {athlete_a}:\n{json.dumps(summary_a, indent=2)}\n\n"
+        f"Runner B — {athlete_b}:\n{json.dumps(summary_b, indent=2)}\n\n"
+        f"Give your response in exactly this format (no extra text):\n"
+        f"**{athlete_a}:** [1-2 sentence personalised tip on what they must do to overtake {athlete_b}]\n"
+        f"**{athlete_b}:** [1-2 sentence personalised tip on what they must do to stay ahead of {athlete_a}]\n"
+        f"**Verdict:** [1 sentence on who has the edge right now and why]"
+    )
+    try:
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
+            json={"model": "llama-3.3-70b-versatile",
+                  "messages": [{"role": "user", "content": prompt}],
+                  "max_tokens": 300},
+            timeout=20,
+        )
+        if resp.ok:
+            return resp.json()["choices"][0]["message"]["content"]
+    except Exception:
+        pass
+    return None
+
+def render_h2h_section(area_id, area_df, leaderboard, profiles):
+    """Render badges + H2H rivalry section inside the area expander."""
+    athletes = leaderboard["athlete"].tolist()
+    leader   = athletes[0]
+    leader_km = float(leaderboard.iloc[0]["total_km"])
+
+    # ── Badges per athlete ──
+    st.markdown("### 🎖️ Achievements")
+    for _, row in leaderboard.iterrows():
+        ath = row["athlete"]
+        ath_df = area_df[area_df["athlete"] == ath]
+        summary = build_athlete_summary(ath_df)
+        summary["is_leader"] = (ath == leader)
+        badges = compute_badges(summary)
+        av = avatar_html(ath, profiles, size=28, border_color="#c8a84b")
+        st.markdown(
+            f"<div style='display:flex;align-items:center;gap:8px;margin-bottom:6px;'>"
+            f"{av}"
+            f"<span style='color:#fff;font-weight:600;font-size:0.85rem;'>{ath}</span>"
+            f"</div>"
+            f"{render_badges(badges)}",
+            unsafe_allow_html=True
+        )
+        st.markdown("<div style='margin-bottom:10px;'></div>", unsafe_allow_html=True)
+
+    # ── H2H: every non-leader vs leader ──
+    if len(athletes) < 2:
+        return
+
+    st.markdown("### ⚔️ Rivalry Intel")
+    st.markdown(
+        f"<div style='color:#888;font-size:0.8rem;margin-bottom:10px;'>"
+        f"Each runner vs 👑 {leader} — AI tips to close the gap</div>",
+        unsafe_allow_html=True
+    )
+
+    leader_df      = area_df[area_df["athlete"] == leader]
+    leader_summary = build_athlete_summary(leader_df)
+    leader_summary["is_leader"] = True
+
+    for challenger in athletes[1:]:
+        h2h_key = f"h2h_{area_id}_{challenger}"
+        gap_km  = round(leader_km - float(leaderboard[leaderboard["athlete"] == challenger]["total_km"].iloc[0]), 1)
+
+        av_l = avatar_html(leader,     profiles, size=32, border_color="#FFD700")
+        av_c = avatar_html(challenger, profiles, size=32, border_color="#e94560")
+
+        st.markdown(f"""
+        <div style='background:rgba(255,255,255,0.03);border:1px solid #333;border-radius:12px;
+                    padding:12px 14px;margin-bottom:10px;'>
+            <div style='display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:8px;'>
+                <div style='display:flex;align-items:center;gap:6px;'>
+                    {av_l}
+                    <span style='color:#FFD700;font-weight:700;font-size:0.88rem;'>👑 {leader}</span>
+                </div>
+                <span style='color:#555;font-size:1.1rem;'>⚔️</span>
+                <div style='display:flex;align-items:center;gap:6px;'>
+                    {av_c}
+                    <span style='color:#e94560;font-weight:700;font-size:0.88rem;'>{challenger}</span>
+                </div>
+            </div>
+            <div style='text-align:center;color:#888;font-size:0.75rem;margin-bottom:8px;'>
+                Gap: <b style='color:#fff;'>{gap_km} km</b> behind
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if h2h_key not in st.session_state:
+            if st.button(f"⚡ Get AI rivalry tips — {challenger} vs {leader}",
+                         key=f"h2h_btn_{area_id}_{challenger}"):
+                chall_df      = area_df[area_df["athlete"] == challenger]
+                chall_summary = build_athlete_summary(chall_df)
+                chall_summary["is_leader"] = False
+                with st.spinner("Analysing rivalry…"):
+                    result = call_h2h_coach(challenger, chall_summary, leader, leader_summary)
+                if result:
+                    st.session_state[h2h_key] = result
+                    st.rerun()
+                else:
+                    st.error("Couldn't reach Groq — check GROQ_API_KEY.")
+        else:
+            result = st.session_state[h2h_key]
+            st.markdown(
+                f"<div style='background:rgba(200,168,75,0.06);border-left:3px solid #c8a84b;"
+                f"border-radius:8px;padding:10px 14px;font-size:0.83rem;color:#e0e0e0;"
+                f"line-height:1.6;'>{result}</div>",
+                unsafe_allow_html=True
+            )
+            if st.button(f"🔄 Refresh tips", key=f"h2h_refresh_{area_id}_{challenger}"):
+                del st.session_state[h2h_key]
+                st.rerun()
+
 # ──────────────────────────────────────────────────────────────────────────
 # Sidebar — upload form
 # ──────────────────────────────────────────────────────────────────────────
@@ -820,6 +983,22 @@ for _, area_row in area_totals.iterrows():
                 st.progress(pct, text=f"{gap} km behind leader")
                 st.markdown("<hr style='margin:4px 0;border-color:#222;'>", unsafe_allow_html=True)
             st.markdown("</div>", unsafe_allow_html=True)
+
+        # ── Badges on podium cards (inline under each top-3 athlete) ──
+        st.markdown("<div style='margin-top:0.5rem;'></div>", unsafe_allow_html=True)
+        for col_idx, rank_idx in enumerate(order[:n]):
+            row     = top3.iloc[rank_idx]
+            ath     = row["athlete"]
+            ath_df  = area_df[area_df["athlete"] == ath]
+            summary = build_athlete_summary(ath_df)
+            summary["is_leader"] = (rank_idx == 0)
+            badges  = compute_badges(summary)
+            with cols[col_idx]:
+                st.markdown(render_badges(badges), unsafe_allow_html=True)
+
+        st.divider()
+        # ── Achievements + H2H rivalry section ──
+        render_h2h_section(area_id, area_df, leaderboard, profiles)
 
 st.divider()
 
