@@ -390,9 +390,75 @@ def call_groq(prompt):
         pass
     return None
 
+def transcribe_audio(audio_bytes, filename="speech.wav"):
+    """Send recorded audio to Groq's Whisper endpoint and return the transcript text."""
+    if not GROQ_KEY or not audio_bytes:
+        return None
+    try:
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/audio/transcriptions",
+            headers={"Authorization": f"Bearer {GROQ_KEY}"},
+            files={"file": (filename, audio_bytes, "audio/wav")},
+            data={"model": "whisper-large-v3-turbo"},
+            timeout=30,
+        )
+        if resp.ok:
+            return resp.json().get("text", "").strip()
+    except Exception:
+        pass
+    return None
+
+def speak_reply_html(text, autoplay_key):
+    """Renders an invisible component that speaks `text` aloud via the browser's
+    built-in speech synthesis (no API key needed). Runs once per unique key."""
+    safe_text = json.dumps(text)  # safely escape quotes/newlines for JS
+    components_html = f"""
+    <script>
+    (function() {{
+        try {{
+            const utter = new SpeechSynthesisUtterance({safe_text});
+            utter.rate = 1.0;
+            utter.pitch = 1.0;
+            window.speechSynthesis.cancel();
+            window.speechSynthesis.speak(utter);
+        }} catch (e) {{ /* speech synthesis unavailable */ }}
+    }})();
+    </script>
+    """
+    st.components.v1.html(components_html, height=0, width=0)
+
+def get_coach_reply(chat_state, user_text):
+    """Sends the running chat history (with system prompt) to Groq and returns the reply text."""
+    groq_messages = [
+        {"role": "user", "content": chat_state["system"]},
+        {"role": "assistant", "content": "Got it! I have your stats and I'm ready to coach you."},
+    ]
+    for m in chat_state["messages"]:
+        groq_messages.append({"role": m["role"], "content": m["content"]})
+
+    try:
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
+            json={
+                "model": "llama-3.3-70b-versatile",
+                "messages": groq_messages,
+                "max_tokens": 300,
+            },
+            timeout=20,
+        )
+        if resp.ok:
+            return resp.json()["choices"][0]["message"]["content"]
+        return "Sorry, I couldn't reach the coaching server. Try again!"
+    except Exception:
+        return "Network error — please try again."
+
 def render_ai_coach(athlete, athlete_df, area_id=""):
     chat_key = f"chat_{athlete}_{area_id}"
     input_key = f"chat_input_{athlete}_{area_id}"
+    mode_key = f"chat_mode_{athlete}_{area_id}"
+    mic_key = f"chat_mic_{athlete}_{area_id}"
+    last_spoken_key = f"chat_last_spoken_{athlete}_{area_id}"
 
     with st.popover("🤖 AI Coach"):
         if not GROQ_KEY:
@@ -430,35 +496,25 @@ def render_ai_coach(athlete, athlete_df, area_id=""):
                 "End with one encouraging sentence inviting them to ask questions."
             )
             with st.spinner("Coach is preparing your assessment…"):
-                try:
-                    resp = requests.post(
-                        "https://api.groq.com/openai/v1/chat/completions",
-                        headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
-                        json={
-                            "model": "llama-3.3-70b-versatile",
-                            "messages": [{"role": "user", "content": opening_prompt}],
-                            "max_tokens": 300,
-                        },
-                        timeout=20,
-                    )
-                    if resp.ok:
-                        opening = resp.json()["choices"][0]["message"]["content"]
-                    else:
-                        opening = "Hey! I\'m your coach. Ask me anything about your training."
-                except Exception:
-                    opening = "Hey! I\'m your coach. Ask me anything about your training."
+                opening = call_groq(opening_prompt) or "Hey! I'm your coach. Ask me anything about your training."
 
             chat_state["messages"].append({"role": "assistant", "content": opening})
             chat_state["opening_done"] = True
             st.rerun()
 
-        # ── Render chat history ──
-        st.markdown(
+        # ── Header + mode toggle ──
+        col_title, col_toggle = st.columns([2, 1])
+        col_title.markdown(
             "<div style='font-size:0.78rem;color:#c8a84b;font-weight:700;"
-            "letter-spacing:1px;margin-bottom:6px;'>🤖 COACH CHAT</div>",
+            "letter-spacing:1px;margin-top:6px;'>🤖 COACH CHAT</div>",
             unsafe_allow_html=True
         )
+        mode = col_toggle.radio(
+            "Mode", ["💬 Text", "🎙️ Voice"], key=mode_key,
+            label_visibility="collapsed", horizontal=True,
+        )
 
+        # ── Render chat history ──
         if not chat_state["messages"]:
             st.markdown(
                 "<div style='color:#888;font-size:0.82rem;font-style:italic;'>"
@@ -482,52 +538,58 @@ def render_ai_coach(athlete, athlete_df, area_id=""):
                         unsafe_allow_html=True
                     )
 
-        # ── Input box ──
-        user_input = st.text_input(
-            "Your message",
-            key=input_key,
-            placeholder="e.g. How do I improve my pace?",
-            label_visibility="collapsed"
-        )
+            # Speak the latest assistant reply aloud when in Voice mode, once per new reply
+            if mode == "🎙️ Voice":
+                last_msg = chat_state["messages"][-1]
+                if last_msg["role"] == "assistant" and st.session_state.get(last_spoken_key) != len(chat_state["messages"]):
+                    speak_reply_html(last_msg["content"], last_spoken_key)
+                    st.session_state[last_spoken_key] = len(chat_state["messages"])
 
-        col_send, col_clear = st.columns([3, 1])
-        send = col_send.button("Send ➤", key=f"send_{athlete}_{area_id}", use_container_width=True)
-        clear = col_clear.button("🗑️", key=f"clear_{athlete}_{area_id}", use_container_width=True)
+        new_user_text = None
 
-        if clear:
-            del st.session_state[chat_key]
-            st.rerun()
-
-        if send and user_input.strip():
-            chat_state["messages"].append({"role": "user", "content": user_input.strip()})
-
-            # Build messages array for Groq: system injected as first user turn
-            groq_messages = [
-                {"role": "user", "content": chat_state["system"]},
-                {"role": "assistant", "content": "Got it! I have your stats and I'm ready to coach you."},
-            ]
-            for m in chat_state["messages"]:
-                groq_messages.append({"role": m["role"], "content": m["content"]})
-
-            with st.spinner("Coach is thinking…"):
-                try:
-                    resp = requests.post(
-                        "https://api.groq.com/openai/v1/chat/completions",
-                        headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
-                        json={
-                            "model": "llama-3.3-70b-versatile",
-                            "messages": groq_messages,
-                            "max_tokens": 300,
-                        },
-                        timeout=20,
-                    )
-                    if resp.ok:
-                        reply = resp.json()["choices"][0]["message"]["content"]
+        if mode == "💬 Text":
+            # ── Text input box ──
+            user_input = st.text_input(
+                "Your message",
+                key=input_key,
+                placeholder="e.g. How do I improve my pace?",
+                label_visibility="collapsed"
+            )
+            col_send, col_clear = st.columns([3, 1])
+            send = col_send.button("Send ➤", key=f"send_{athlete}_{area_id}", use_container_width=True)
+            clear = col_clear.button("🗑️", key=f"clear_{athlete}_{area_id}", use_container_width=True)
+            if clear:
+                del st.session_state[chat_key]
+                st.rerun()
+            if send and user_input.strip():
+                new_user_text = user_input.strip()
+        else:
+            # ── Voice input: record, transcribe, send ──
+            st.caption("Tap to record, then I'll transcribe it and the coach will reply out loud.")
+            audio_value = st.audio_input("Speak to your coach", key=mic_key, label_visibility="collapsed")
+            col_clear_v, = st.columns([1])
+            clear_v = col_clear_v.button("🗑️ Clear chat", key=f"clear_v_{athlete}_{area_id}", use_container_width=True)
+            if clear_v:
+                del st.session_state[chat_key]
+                st.rerun()
+            if audio_value is not None:
+                audio_bytes = audio_value.getvalue()
+                # Only transcribe+send if this is a new recording (avoid re-sending on rerun)
+                audio_sig_key = f"chat_audio_sig_{athlete}_{area_id}"
+                audio_sig = len(audio_bytes)
+                if st.session_state.get(audio_sig_key) != audio_sig:
+                    with st.spinner("Transcribing…"):
+                        transcript = transcribe_audio(audio_bytes)
+                    if transcript:
+                        new_user_text = transcript
+                        st.session_state[audio_sig_key] = audio_sig
                     else:
-                        reply = "Sorry, I couldn't reach the coaching server. Try again!"
-                except Exception:
-                    reply = "Network error — please try again."
+                        st.warning("Couldn't transcribe that — try again.")
 
+        if new_user_text:
+            chat_state["messages"].append({"role": "user", "content": new_user_text})
+            with st.spinner("Coach is thinking…"):
+                reply = get_coach_reply(chat_state, new_user_text)
             chat_state["messages"].append({"role": "assistant", "content": reply})
             st.rerun()
 
