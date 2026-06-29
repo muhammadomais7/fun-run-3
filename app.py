@@ -179,6 +179,7 @@ def assign_area_ids(runs):
     labels = DBSCAN(eps=eps, min_samples=1, metric="haversine").fit(coords).labels_
     return [f"area_{lbl}" for lbl in labels]
 
+@st.cache_data(show_spinner=False)
 def get_area_name(lat, lon, cache):
     key = f"{round(lat, 3)},{round(lon, 3)}"
     if key in cache:
@@ -208,7 +209,9 @@ def get_area_name(lat, lon, cache):
     cache[key] = name
     return name
 
-def build_dataframe(runs):
+@st.cache_data(show_spinner=False)
+def build_dataframe(runs_tuple):
+    runs = [json.loads(r) for r in runs_tuple]
     df = pd.DataFrame(runs)
     if df.empty:
         return df
@@ -674,7 +677,7 @@ for track, pos, ath in rank_ups_now:
 # Main content
 # ──────────────────────────────────────────────────────────────────────────
 runs     = load_runs()
-df       = build_dataframe(runs) if runs else pd.DataFrame()
+df       = build_dataframe(tuple(json.dumps(r, sort_keys=True) for r in runs)) if runs else pd.DataFrame()
 profiles = load_profiles()
 
 total_tracks = df["area_id"].nunique() if not df.empty else 0
