@@ -962,15 +962,25 @@ for a in area_summaries:
     msg_line = ""
     if owner_message:
         safe_msg = owner_message[:40].replace("<","&lt;").replace(">","&gt;")
-        msg_line = f'<div style="font-size:10px;color:#e94560;font-style:italic;margin-top:2px;">💬 {safe_msg}</div>'
+        msg_line = f'<div style="font-size:10px;color:#e94560;font-style:italic;margin-top:3px;max-width:160px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">💬 {safe_msg}</div>'
+
+    # Build avatar for the map label
+    initials_map = "".join([w[0].upper() for w in owner.split()[:2]])
+    if owner_photo_b64:
+        avatar_map = (
+            f'<img src="data:image/jpeg;base64,{owner_photo_b64}" '            f'style="width:38px;height:38px;border-radius:50%;object-fit:cover;'            f'border:2px solid {ring_color};margin-bottom:4px;display:block;" />'        )
+    else:
+        avatar_map = (
+            f'<div style="width:38px;height:38px;border-radius:50%;'            f'background:linear-gradient(135deg,{ring_color},#333);'            f'display:flex;align-items:center;justify-content:center;'            f'font-size:13px;font-weight:700;color:#fff;'            f'border:2px solid {ring_color};margin-bottom:4px;">{initials_map}</div>'        )
 
     label_html = f"""
     <div style="
         display:flex; flex-direction:column; align-items:center; justify-content:center;
         text-align:center; pointer-events:none;
-        text-shadow: 0 1px 3px #000, 0 0 6px #000;
+        text-shadow: 0 1px 4px #000, 0 0 8px #000;
     ">
-        <div style="font-size:13px; font-weight:800; color:#FFD700; letter-spacing:0.5px; white-space:nowrap;">
+        {avatar_map}
+        <div style="font-size:12px; font-weight:800; color:#FFD700; letter-spacing:0.5px; white-space:nowrap;">
             👑 {owner}
         </div>
         <div style="font-size:11px; font-weight:600; color:#fff; margin-top:1px;">
@@ -985,8 +995,8 @@ for a in area_summaries:
         location=[dlat, dlon],
         icon=folium.DivIcon(
             html=label_html,
-            icon_size=(180, 54),
-            icon_anchor=(90, 27),   # centre of the div
+            icon_size=(180, 80),
+            icon_anchor=(90, 40),   # centre of the div
         ),
     ).add_to(ownership_layer)
 
