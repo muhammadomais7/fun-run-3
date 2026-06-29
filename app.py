@@ -720,7 +720,7 @@ if st.sidebar.button("Add to Leaderboard", type="primary"):
     else:
         runs = load_runs()
 
-        df_before = build_dataframe(runs) if runs else pd.DataFrame()
+        df_before = build_dataframe(tuple(json.dumps(r, sort_keys=True) for r in runs)) if runs else pd.DataFrame()
         leaders_before = snapshot_leaders(df_before)
 
         profiles = load_profiles()
@@ -748,7 +748,7 @@ if st.sidebar.button("Add to Leaderboard", type="primary"):
                 added += 1
         save_runs(runs)
 
-        df_after = build_dataframe(runs)
+        df_after = build_dataframe(tuple(json.dumps(r, sort_keys=True) for r in runs))
         leaders_after = snapshot_leaders(df_after)
 
         conquerors = []
