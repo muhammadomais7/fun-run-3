@@ -28,21 +28,21 @@ st.set_page_config(page_title="Runova", page_icon="⚡", layout="wide")
 st.markdown("""
 <style>
 .stApp {
-    background-image: url("data:image/jpeg;base64,...
-    background-size: 120%;
+    background-image: url("data:image/jpeg;base64,...");
+    background-size: cover;
     background-position: center;
+    background-attachment: fixed;
     background-repeat: no-repeat;
     background-blend-mode: overlay;
     background-color: rgba(14, 17, 23, 0.88);
     animation: dragonDrift 25s ease-in-out infinite;
 }
-
 @keyframes dragonDrift {
-    0%   { background-position: 50% 50%; background-size: 120%; }
-    25%  { background-position: 55% 45%; background-size: 125%; }
-    50%  { background-position: 48% 55%; background-size: 122%; }
-    75%  { background-position: 53% 48%; background-size: 118%; }
-    100% { background-position: 50% 50%; background-size: 120%; }
+    0%   { background-position: center; }
+    25%  { background-position: 55% 45%; }
+    50%  { background-position: 48% 55%; }
+    75%  { background-position: 53% 48%; }
+    100% { background-position: center; }
 }
 .stApp::before {
     content: "";
